@@ -18,6 +18,7 @@ import (
 
 	"github.com/google/shlex"
 	"gopkg.in/alecthomas/kingpin.v2"
+	"gopkg.in/vmihailenco/msgpack.v2"
 )
 
 type Severity string
@@ -39,6 +40,10 @@ type Linter struct {
 
 func (l *Linter) MarshalJSON() ([]byte, error) {
 	return json.Marshal(l.Name)
+}
+
+func (l *Linter) EncodeMsgpack(enc *msgpack.Encoder) error {
+	return enc.Encode(l.Name)
 }
 
 func (l *Linter) String() string {
@@ -176,6 +181,7 @@ var (
 	deadlineFlag      = kingpin.Flag("deadline", "Cancel linters if they have not completed within this duration.").Default("5s").Duration()
 	errorsFlag        = kingpin.Flag("errors", "Only show errors.").Bool()
 	jsonFlag          = kingpin.Flag("json", "Generate structured JSON rather than standard line-based output.").Bool()
+	msgpackFlag       = kingpin.Flag("msgpack", "Encodes output with messagepack rather than standard line-based output.").Bool()
 )
 
 func disableAllLinters(*kingpin.ParseContext) error {
@@ -196,12 +202,12 @@ func init() {
 }
 
 type Issue struct {
-	Linter   *Linter  `json:"linter"`
-	Severity Severity `json:"severity"`
-	Path     string   `json:"path"`
-	Line     int      `json:"line"`
-	Col      int      `json:"col"`
-	Message  string   `json:"message"`
+	Linter   *Linter  `json:"linter" msgpack:"linter"`
+	Severity Severity `json:"severity" msgpack:"severity"`
+	Path     string   `json:"path" msgpack:"path"`
+	Line     int      `json:"line" msgpack:"line"`
+	Col      int      `json:"col" msgpack:"col"`
+	Message  string   `json:"message" msgpack:"message"`
 }
 
 func (i *Issue) String() string {
@@ -324,6 +330,8 @@ Severity override map (default is "warning"):
 	issues, errch := runLinters(lintersFlag, disable, paths, *concurrencyFlag, exclude, include)
 	if *jsonFlag {
 		status |= outputToJSON(issues)
+	} else if *msgpackFlag {
+		status |= outputToMsgpack(issues)
 	} else {
 		status |= outputToConsole(issues)
 	}
@@ -365,6 +373,20 @@ func outputToJSON(issues chan *Issue) int {
 	}
 	fmt.Printf("\n]\n")
 	return status
+}
+
+func outputToMsgpack(issues chan *Issue) int {
+	mi := []*Issue{}
+	for issue := range issues {
+		if *errorsFlag && issue.Severity != Error {
+			continue
+		}
+		mi = append(mi, issue)
+	}
+	d, err := msgpack.Marshal(mi)
+	kingpin.FatalIfError(err, "")
+	fmt.Printf("%s", d)
+	return 1
 }
 
 func runLinters(linters map[string]string, disable map[string]bool, paths []string, concurrency int, exclude *regexp.Regexp, include *regexp.Regexp) (chan *Issue, chan error) {
